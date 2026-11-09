@@ -6,59 +6,18 @@ Ejecutar con:  streamlit run app.py
 """
 from __future__ import annotations
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
 from pdf_generator import build_pdf
+from plots import boundary_figure, perceptron_figure
 from perceptron import GATES, INPUTS, Perceptron, fmt, step_to_latex
 
 st.set_page_config(page_title="Perceptrón monocapa", page_icon="🧠", layout="wide")
 
 # Valores preestablecidos (los del ejercicio en el pizarrón)
 DEF_W1, DEF_W2, DEF_B, DEF_ETA, DEF_EPOCHS = 0.1, 0.3, 0.2, 0.1, 20
-
-
-# --------------------------------------------------------------------------- #
-# Esquema SVG dinámico (REQ 1)
-# --------------------------------------------------------------------------- #
-def perceptron_svg(w1, w2, b, x1=None, x2=None, z=None, y=None) -> str:
-    v = lambda x: "" if x is None else fmt(x)
-    out_fill = "none" if y is None else ("#2e9e5b" if y == 1 else "#8a8f98")
-    out_txt = "y" if y is None else f"y = {y}"
-    z_txt = "" if z is None else f"z = {fmt(z)}"
-    return f"""
-<svg viewBox="0 0 660 270" xmlns="http://www.w3.org/2000/svg"
-     style="width:100%;max-width:760px;color:inherit;font-family:sans-serif">
-  <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
-        orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
-  <g stroke="currentColor" stroke-width="1.8" fill="none">
-    <circle cx="70" cy="80" r="26"/><circle cx="70" cy="210" r="26"/>
-    <line x1="96" y1="84" x2="262" y2="132" marker-end="url(#arr)"/>
-    <line x1="96" y1="206" x2="262" y2="158" marker-end="url(#arr)"/>
-    <circle cx="300" cy="145" r="38"/>
-    <circle cx="300" cy="28" r="18"/>
-    <line x1="300" y1="46" x2="300" y2="105" marker-end="url(#arr)"/>
-    <line x1="338" y1="145" x2="398" y2="145" marker-end="url(#arr)"/>
-    <rect x="400" y="105" width="90" height="80" rx="8"/>
-    <polyline points="412,165 445,165 445,125 478,125" stroke-width="2.4"/>
-    <line x1="490" y1="145" x2="556" y2="145" marker-end="url(#arr)"/>
-    <circle cx="595" cy="145" r="36" fill="{out_fill}" fill-opacity="0.35"/>
-  </g>
-  <g fill="currentColor" font-size="15" text-anchor="middle">
-    <text x="70" y="86" font-size="18">x₁</text><text x="70" y="216" font-size="18">x₂</text>
-    <text x="70" y="124">{v(x1)}</text><text x="70" y="254">{v(x2)}</text>
-    <text x="300" y="158" font-size="38">Σ</text>
-    <text x="300" y="34" font-size="17">b</text>
-    <text x="445" y="203" font-size="13">escalón f(z)</text>
-    <text x="445" y="96">{z_txt}</text>
-    <text x="595" y="150" font-size="15">{out_txt}</text>
-  </g>
-  <g fill="currentColor" font-size="14">
-    <text x="118" y="74">w₁ = {fmt(w1)}</text>
-    <text x="118" y="236">w₂ = {fmt(w2)}</text>
-    <text x="312" y="84">b = {fmt(b)}</text>
-  </g>
-</svg>"""
 
 
 # --------------------------------------------------------------------------- #
@@ -109,6 +68,7 @@ with cfg_col:
                                     max_epochs=int(max_epochs))
         st.session_state.pdf = None
         st.session_state.epoch_sel = 1
+        st.session_state.graph_epoch = len(st.session_state.result.history)
 
 result = st.session_state.result
 cfg = st.session_state.cfg
@@ -168,16 +128,31 @@ with calc_col:
         st.caption("Sección oculta.")
 
 # =========================================================================== #
-# ABAJO: esquema dinámico (REQ 1) e inferencia (REQ 6)
+# ABAJO: esquema del perceptrón (REQ 1) + frontera de decisión + inferencia (REQ 6)
 # =========================================================================== #
 st.divider()
 st.header("🔬 Esquema del perceptrón y prueba")
-sch_col, inf_col = st.columns([2, 1], gap="large")
 
-fw1, fw2, fb = (result.w1, result.w2, result.b) if result else (w1, w2, b)
+if result is None:
+    st.caption("Vista previa con los parámetros iniciales. Entrena para ver el resultado.")
+    gsel, gw1, gw2, gb = 0, w1, w2, b
+    samples_now = [(float(a), float(c), t) for (a, c), t in zip(INPUTS, t_list)]
+    path = [(w1, w2, b)]
+else:
+    samples_now = cfg["samples"]
+    gsel = st.select_slider("Época a graficar (los pesos salen del entrenamiento)",
+                            options=list(range(len(result.history) + 1)),
+                            key="graph_epoch",
+                            format_func=lambda e: "Inicial" if e == 0 else f"Época {e}")
+    path = [(result.w1_init, result.w2_init, result.b_init)] + \
+           [(e.w1, e.w2, e.b) for e in result.history[:gsel]]
+    gw1, gw2, gb = path[-1]
+
+graph_title = "Pesos iniciales" if gsel == 0 else f"Pesos al terminar la época {gsel}"
 x1 = x2 = z = y = None
+left, right = st.columns([1.7, 1], gap="large")
 
-with inf_col:
+with right:
     st.subheader("Módulo de inferencia")
     if result is None:
         st.info("Entrena el perceptrón para habilitar la prueba.")
@@ -185,16 +160,23 @@ with inf_col:
         i1, i2 = st.columns(2)
         x1 = i1.number_input("x₁", value=0.0, step=1.0)
         x2 = i2.number_input("x₂", value=0.0, step=1.0)
-        z, y = Perceptron(fw1, fw2, fb, result.eta).predict(x1, x2)
-        st.latex(rf"z = ({fmt(x1)} \cdot {fmt(fw1)}) + ({fmt(x2)} \cdot {fmt(fw2)}) "
-                 rf"+ {fmt(fb)} = {fmt(z)}")
+        z, y = Perceptron(gw1, gw2, gb, result.eta).predict(x1, x2)
+        st.latex(rf"z = ({fmt(x1)} \cdot {fmt(gw1)}) + ({fmt(x2)} \cdot {fmt(gw2)}) "
+                 rf"+ {fmt(gb)} = {fmt(z)}")
         st.metric("Salida predicha y", y)
-        expected = {(a, c): t for a, c, t in cfg["samples"]}.get((x1, x2))
+        expected = {(a, c): t for a, c, t in samples_now}.get((x1, x2))
         if expected is not None:
             st.caption("✅ Coincide con la tabla de verdad." if expected == y
                        else f"⚠️ La tabla de verdad esperaba t = {expected}.")
 
-with sch_col:
-    st.caption("Pesos finales tras el entrenamiento." if result
-               else "Pesos iniciales configurados.")
-    st.html(perceptron_svg(fw1, fw2, fb, x1, x2, z, y))
+with left:
+    fig = perceptron_figure(gw1, gw2, gb, x1, x2, z, y, graph_title)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.markdown("**Frontera de decisión** " + r"$w_1x_1 + w_2x_2 + b = 0$")
+    st.caption("Línea continua: época mostrada. Líneas punteadas: épocas anteriores. "
+               "Zona verde: y = 1.")
+    fig2 = boundary_figure(samples_now, path, (x1, x2) if x1 is not None else None,
+                           graph_title)
+    st.pyplot(fig2)
+    plt.close(fig2)
